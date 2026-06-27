@@ -167,7 +167,7 @@ def show_plane():
 
 
 # ==================================================
-# AIRDROP ANIMATION
+# Character DROP ANIMATION
 # ==================================================
 
 def show_character_drop():
@@ -176,13 +176,13 @@ def show_character_drop():
 
     render_html(
         f"""
-        <div class='character-container'>
-            <img
-            src='data:image/png;base64,{img_b64}'
-            class='character'/>
+        <div class="character-container">
+            <img src="data:image/png;base64,{img_b64}" class="character">
         </div>
         """
     )
+
+    time.sleep(0.2)
 
 # ==================================================
 # SAFE ZONE
@@ -328,16 +328,6 @@ def show_battle_intro():
 #  that actually shrinks over the Miramar map)
 # ==================================================
 
-# 1. Updated Base64 Function (Added .decode('utf-8') to prevent raw bytes issue)
-def get_base64_image(image_path):
-    with open(image_path, "rb") as img_file:
-        return base64.b64encode(img_file.read()).decode('utf-8')
-
-# 2. Updated Render Function (Added unsafe_allow_html=True)
-def render_html(html_string):
-    st.markdown(html_string, unsafe_allow_html=True)
-
-# 3. Your Main Function
 def show_map_zone(zone_safety, player_health=80): 
     size = 160 + (zone_safety * 14)   
 
