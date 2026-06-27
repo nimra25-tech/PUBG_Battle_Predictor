@@ -133,7 +133,7 @@
     left:50%;
     top:-180px;
     transform:translateX(-50%);
-    animation:dropCharacter 2.2s ease-out forwards;
+    animation:dropCharacter 4s ease-out forwards;
     z-index:9999;
 }
 
