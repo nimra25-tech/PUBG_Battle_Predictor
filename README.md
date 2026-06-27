@@ -3,6 +3,7 @@
 A PUBG-themed **Streamlit web app** that predicts your chances of winning a match using probability and statistics — built as a portfolio/university project combining a real prediction engine with an immersive, game-inspired UI.
 
 🔗 **Live App: https://pubgbattlepredictor-m6p3shtm9xdphmn3ymsdxb.streamlit.app/
+
  **Repo:** `nimra25-tech/PUBG_Battle_Predictor`
 
 ---
