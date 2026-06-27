@@ -339,9 +339,9 @@ if "result" in st.session_state:
                 use_container_width=True
             )
 
-            fig_pie.write_image(
-                "charts/factor_contribution.png"
-            )
+            # fig_pie.write_image(
+            #     "charts/factor_contribution.png"
+            # )
 
         with chart_hist:
 
@@ -363,9 +363,9 @@ if "result" in st.session_state:
                     use_container_width=True
                 )
 
-                fig_hist.write_image(
-                   "charts/win_distribution.png"
-                )
+                # fig_hist.write_image(
+                #    "charts/win_distribution.png"
+                # )
 
             else:
 
@@ -410,9 +410,9 @@ if "result" in st.session_state:
                 use_container_width=True
             )
 
-            fig_bar.write_image(
-                "charts/player_stats.png"
-            )
+            # fig_bar.write_image(
+            #     "charts/player_stats.png"
+            # )
 
         with chart_compare:
 
@@ -445,9 +445,9 @@ if "result" in st.session_state:
                 use_container_width=True
             )
 
-            fig_compare.write_image(
-                "charts/mean_comparison.png"
-            )
+            # fig_compare.write_image(
+            #     "charts/mean_comparison.png"
+            # )
 
         st.subheader(
             "🎯 Kills vs Win Probability"
@@ -468,9 +468,9 @@ if "result" in st.session_state:
                 use_container_width=True
             )
 
-            scatter_fig.write_image(
-                "charts/kills_vs_probability.png"
-            )
+            # scatter_fig.write_image(
+            #     "charts/kills_vs_probability.png"
+            # )
 
         else:
 
