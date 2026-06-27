@@ -1,10 +1,10 @@
 import streamlit as st
 import streamlit.components.v1 as components
 import base64
+import math
 import time
 import os
-
-
+import io
 
 
 # ==================================================
@@ -14,18 +14,13 @@ import os
 # block, even with unsafe_allow_html=True. Since our HTML
 # snippets are written as indented strings inside functions,
 # we strip leading whitespace from every line before handing
-# it to st.markdown so it actually renders as HTML/JS.
+# it to st.markdown so it actually renders as HTML.
 
 def render_html(content):
     lines = content.strip("\n").split("\n")
     cleaned = "\n".join(line.lstrip() for line in lines)
     st.markdown(cleaned, unsafe_allow_html=True)
 
-def show_prediction_results(win_prob=63.92):
-    win_prob_html = f"<h2>WIN PROBABILITY</h2><div class='progress'><div class='progress-fill' style='width:{win_prob}%'></div></div><h1>{win_prob}%</h1>"
-    badge_html = f"<div class='badge-emoji'>🥈</div><div class='badge-title' style='color:#c0c0c0;'>TOP 10 FINISHER</div><div class='badge-commentary'>Aggressive and effective — fighting for every zone. ⚔️</div>"
-    render_html(win_prob_html)
-    render_html(badge_html)
 
 # ==================================================
 # CSS LOADER
@@ -55,60 +50,80 @@ def load_css():
 # ==================================================
 # JS LOADER
 # ==================================================
+# All visual effects now run on pure CSS (see styles.css), so
+# this file is effectively a no-op kept only so the app can
+# still call load_js() without changing its structure. It no
+# longer reaches into the parent document, which was the
+# source of the old cross-iframe flakiness on Streamlit Cloud.
 
 def load_js():
 
     with open("static/animation.js") as f:
-
         js = f.read()
 
-    # st.markdown() never executes <script> tags (browsers ignore
-    # scripts inserted via innerHTML). components.html() renders inside
-    # a real <iframe>, so the script actually runs. Since the elements
-    # we want to animate (.zone, .prob-card, #player-marker, etc.) live
-    # on the *parent* page, not inside this iframe, we redirect every
-    # "document" lookup to "window.parent.document" so the script can
-    # reach them. Streamlit's iframe is same-origin, so this is allowed.
-    patched_js = js.replace(
-        "document.", "window.parent.document."
-    )
-
     components.html(
-        f"<script>{patched_js}</script>",
+        f"<script>{js}</script>",
         height=0,
         width=0
     )
 
 
 # ==================================================
-# SOUND PLAYER
+# SOUND PLAYER (dedup'd against unnecessary replays)
 # ==================================================
+# Streamlit reruns the whole script on every interaction. Without
+# guarding it, an autoplay <audio> tag re-renders (and therefore
+# replays) on every single rerun, not just the first time it's
+# shown. We track which sound keys have already played in this
+# session and skip re-injecting the tag for ones that have,
+# unless the caller explicitly asks to force a replay.
 
-def play_sound(file_path):
+def play_sound(file_path, key=None, force=False):
+
+    sound_key = key or file_path
+
+    if "played_sounds" not in st.session_state:
+        st.session_state["played_sounds"] = set()
+
+    if not force and sound_key in st.session_state["played_sounds"]:
+        return
+
     try:
-        # Full relative path from project root
-        full_path = os.path.join(os.path.dirname(__file__), "..", file_path)
-        
+        full_path = os.path.join(os.path.dirname(__file__), file_path)
+
         if not os.path.exists(full_path):
-            # Fallback: direct path
             full_path = file_path
-        
+
         with open(full_path, "rb") as audio_file:
             audio_bytes = audio_file.read()
-        
+
         b64 = base64.b64encode(audio_bytes).decode()
-        
+
         md = f"""
-        <audio autoplay>
+        <audio autoplay style="display:none;">
         <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
         </audio>
         """
         render_html(md)
-        
+
+        st.session_state["played_sounds"].add(sound_key)
+
     except FileNotFoundError:
         st.warning(f"Sound file not found: {file_path}")
     except Exception as e:
         st.error(f"Error playing sound {file_path}: {str(e)}")
+
+
+# ==================================================
+# BASE64 IMAGE HELPER
+# ==================================================
+
+def get_base64_image(path):
+    with open(path, "rb") as f:
+        data = f.read()
+    return base64.b64encode(data).decode()
+
+
 # ==================================================
 # HERO SECTION
 # ==================================================
@@ -118,154 +133,189 @@ def show_hero():
         """
         <div class='hero-container'>
             <div class='hero-title'>
-                🏜️ PUBG BATTLE WIN PREDICTOR   <!-- Fixed Bug 2 -->
+                🏜️ PUBG BATTLE WIN PREDICTOR
             </div>
             <div class='hero-subtitle'>
                 MIRAMAR SURVIVAL ANALYSIS SYSTEM
             </div>
+            <div class='hero-divider'></div>
         </div>
         """
     )
 
 
 # ==================================================
-# PLANE ANIMATION
+# INTRO SEQUENCE
 # ==================================================
+# Rendered as ONE persistent HTML block. The plane flight,
+# parachute drop, "Entering Miramar..." text, progress bar and
+# status lines are all chained CSS @keyframes with
+# animation-delay (see styles.css), so the whole sequence plays
+# out inside a single render with nothing replacing it midway.
+# Python only needs one time.sleep() for the total duration —
+# there is no rerun in between to interrupt the animation, which
+# is what made the old two-call (plane, then drop) version
+# unreliable on Streamlit Cloud.
 
-# ==================================================
-# BASE64 IMAGE HELPER
-# (raw relative paths like src='assets/images/plane.png'
-#  don't resolve inside Streamlit's markdown HTML, so we
-#  embed images directly as base64 data URIs instead)
-# ==================================================
-
-def get_base64_image(path):
-
-    with open(path, "rb") as f:
-        data = f.read()
-
-    return base64.b64encode(data).decode()
+INTRO_DURATION_SECONDS = 5.4
 
 
-# ==================================================
-# PLANE ANIMATION
-# ==================================================
+def show_intro_sequence():
 
-def show_plane():
-    img_b64 = get_base64_image("assets/images/plane.png")
-    render_html(
-        f"""
-        <div class='plane-container'>
-            <img src='data:image/png;base64,{img_b64}' class='plane'/>
-        </div>
-        """
-    )
-    try:
-        play_sound("assets/sounds/plane.mp3")
-    except:
-        pass
-
-
-# ==================================================
-# Character DROP ANIMATION
-# ==================================================
-
-def show_character_drop():
-
-    img_b64 = get_base64_image("assets/images/character.png")
-
-    render_html(
-        f"""
-        <div class="character-container">
-            <img src="data:image/png;base64,{img_b64}" class="character">
-        </div>
-        """
-    )
-
-    time.sleep(0.2)
-
-# ==================================================
-# SAFE ZONE
-# ==================================================
-
-def show_safe_zone():
-
+    plane_b64 = get_base64_image("assets/images/plane.png")
     character_b64 = get_base64_image("assets/images/character.png")
 
     render_html(
         f"""
-        <div class='zone'>
-            <img
-                id='player-marker'
-                class='character-marker'
-                src='data:image/png;base64,{character_b64}'
-            />
+        <div class='intro-stage'>
+            <img src='data:image/png;base64,{plane_b64}' class='intro-plane'/>
+            <img src='data:image/png;base64,{character_b64}' class='intro-character'/>
+            <div class='intro-text-stack'>
+                <div class='intro-entering'>🪂 ENTERING MIRAMAR...</div>
+            </div>
+            <div class='intro-progress-track'>
+                <div class='intro-progress-fill'></div>
+            </div>
+            <div class='intro-status-line'>
+                <span class='s1'>Preparing Match...</span>
+                <span class='s2'>Loading Terrain...</span>
+                <span class='s3'>Loading Squad...</span>
+                <span class='s4'>Scanning Safe Zone...</span>
+                <span class='s5'>Deploying Player...</span>
+            </div>
+        </div>
+        """
+    )
+
+    play_sound("assets/sounds/plane.mp3", key="intro_plane")
+
+
+# ==================================================
+# PROBABILITY METER — ANIMATED CIRCULAR GAUGE
+# ==================================================
+
+def show_probability_meter(probability):
+
+    probability = max(0, min(100, probability))
+
+    radius = 80
+    circumference = 2 * math.pi * radius
+    offset = circumference * (1 - probability / 100)
+
+    if probability >= 70:
+        color = "#4dff88"
+    elif probability >= 50:
+        color = "#ffcc33"
+    else:
+        color = "#ff4d4d"
+
+    render_html(
+        f"""
+        <div class='gauge-wrap'>
+            <svg class='gauge-svg' viewBox="0 0 200 200">
+                <circle class='gauge-arc-bg' cx="100" cy="100" r="{radius}" />
+                <circle
+                    class='gauge-arc-fill'
+                    cx="100" cy="100" r="{radius}"
+                    stroke="{color}"
+                    stroke-dasharray="{circumference:.2f}"
+                    stroke-dashoffset="{circumference:.2f}"
+                    transform="rotate(-90 100 100)"
+                    style="animation: gauge-fill 1.2s ease forwards;"
+                />
+                <text x="100" y="96" text-anchor="middle" class='gauge-value'>{probability:.1f}%</text>
+                <text x="100" y="124" text-anchor="middle" class='gauge-label'>WIN PROBABILITY</text>
+            </svg>
+            <style>
+                @keyframes gauge-fill {{
+                    from {{ stroke-dashoffset: {circumference:.2f}; }}
+                    to   {{ stroke-dashoffset: {offset:.2f}; }}
+                }}
+            </style>
         </div>
         """
     )
 
 
 # ==================================================
-# PROBABILITY BAR
-# ==================================================
-
-def show_probability_meter(probability):
-
-    render_html(f"<div class='prob-card'><h2>WIN PROBABILITY</h2><div class='progress'><div class='progress-fill' style='width:{probability}%'></div></div><h1>{probability}%</h1></div>")
-    
-
-
-# ==================================================
-# RESULT CARD
+# RESULT DASHBOARD
 # ==================================================
 
 def show_result(result):
 
     probability = result["probability"]
-
     risk = result["risk"]
 
     if result.get("is_chicken_dinner"):
-
-        play_sound(
-            "assets/sounds/victory.mp3"
-        )
-
+        play_sound("assets/sounds/victory.mp3", key="victory")
         show_celebration()
-
-        st.success(
-            f"🏆 {risk}"
-        )
-
+        banner_class = "good"
     elif probability >= 50:
-
-        st.warning(
-            f"⚔️ {risk}"
-        )
-
+        banner_class = "warn"
     else:
+        play_sound("assets/sounds/danger.mp3", key="danger")
+        banner_class = "bad"
 
-        play_sound(
-            "assets/sounds/danger.mp3"
-        )
+    render_html(
+        f"""
+        <div class='risk-banner {banner_class}'>
+            {risk}
+        </div>
+        """
+    )
 
-        st.error(
-            f"💀 {risk}"
-        )
+    render_html(
+        f"""
+        <div class='dashboard-grid'>
+            <div class='dash-tile'>
+                <div class='dash-tile-label'>Mean Win %</div>
+                <div class='dash-tile-value'>{result['mean']}</div>
+            </div>
+            <div class='dash-tile'>
+                <div class='dash-tile-label'>Variance</div>
+                <div class='dash-tile-value'>{result['variance']}</div>
+            </div>
+            <div class='dash-tile'>
+                <div class='dash-tile-label'>Std Dev</div>
+                <div class='dash-tile-value'>{result['std']}</div>
+            </div>
+            <div class='dash-tile'>
+                <div class='dash-tile-label'>Z-Score</div>
+                <div class='dash-tile-value'>{result['z_score']}</div>
+            </div>
+        </div>
+        """
+    )
 
 
 # ==================================================
-# CHICKEN DINNER CELEBRATION (trophy + confetti)
+# CHICKEN DINNER CELEBRATION
 # ==================================================
 
 def show_celebration():
-
-    render_html(f"""<div class='celebration'><div class='confetti-field'><span class='confetti c1'>🎉</span><span class='confetti c2'>🎊</span><span class='confetti c3'>✨</span><span class='confetti c4'>🎉</span><span class='confetti c5'>🎊</span><span class='confetti c6'>✨</span><span class='confetti c7'>🎉</span><span class='confetti c8'>🎊</span></div><div class='trophy-pop'>🏆</div><div class='chicken-dinner-text'>WINNER WINNER CHICKEN DINNER</div></div>""")
-
+    render_html(
+        """
+        <div class='celebration'>
+            <div class='confetti-field'>
+                <span class='confetti c1'>🎉</span>
+                <span class='confetti c2'>🎊</span>
+                <span class='confetti c3'>✨</span>
+                <span class='confetti c4'>🎉</span>
+                <span class='confetti c5'>🎊</span>
+                <span class='confetti c6'>✨</span>
+                <span class='confetti c7'>🎉</span>
+                <span class='confetti c8'>🎊</span>
+            </div>
+            <div class='trophy-pop'>🏆</div>
+            <div class='chicken-dinner-text'>WINNER WINNER CHICKEN DINNER</div>
+        </div>
+        """
+    )
 
 
 # ==================================================
-# STAT CARDS
+# STAT CARDS (kept for the Statistics tab — native
+# st.metric widgets, separate from the dashboard tiles)
 # ==================================================
 
 def show_stats(result):
@@ -273,96 +323,64 @@ def show_stats(result):
     col1, col2 = st.columns(2)
 
     with col1:
-
-        st.metric(
-            "Mean Win %",
-            result["mean"]
-        )
-
-        st.metric(
-            "Variance",
-            result["variance"]
-        )
+        st.metric("Mean Win %", result["mean"])
+        st.metric("Variance", result["variance"])
 
     with col2:
-
-        st.metric(
-            "Std Dev",
-            result["std"]
-        )
-
-        st.metric(
-            "Z Score",
-            result["z_score"]
-        )
-
-
-# ==================================================
-# BATTLE INTRO
-# ==================================================
-
-def show_battle_intro():
-
-    render_html(
-        """
-        <div class='battle-intro'>
-
-            🛩️ Plane Entering Miramar...
-
-            <br><br>
-
-            📦 Airdrop Deployed...
-
-            <br><br>
-
-            🔫 Calculating Survival Chances...
-
-        </div>
-        """
-    )
+        st.metric("Std Dev", result["std"])
+        st.metric("Z Score", result["z_score"])
 
 
 # ==================================================
 # MAP-BASED SAFE ZONE
-# (replaces the plain floating circle with a zone
-#  that actually shrinks over the Miramar map)
 # ==================================================
 
-def show_map_zone(zone_safety, player_health=80): 
-    size = 160 + (zone_safety * 14)   
+def show_map_zone(zone_safety, player_health=80):
+    size = 160 + (zone_safety * 14)
 
-    # Images fetch karein
     map_b64 = get_base64_image("assets/images/mirammar.jpg")
     zone_b64 = get_base64_image("assets/images/blueZone.png")
-    player_b64 = get_base64_image("assets/images/playerIcon.png") 
+    player_b64 = get_base64_image("assets/images/playerIcon.png")
 
-    # Dynamic Health Bar Color Logic
     if player_health > 50:
-        health_color = "#00ff00"  # Green
+        health_color = "#00ff00"
     elif player_health > 20:
-        health_color = "#ffff00"  # Yellow
+        health_color = "#ffff00"
     else:
-        health_color = "#ff0000"  # Red
+        health_color = "#ff0000"
 
-    # Single-line HTML (Player wrapper groups the icon and health bar together)
-    html_content = f"<div class='map-frame' style='background-image:url(\"data:image/jpeg;base64,{map_b64}\"); background-size: cover; position:relative; overflow:hidden; border-radius:12px; width: 100%; height: 400px;'><img src='data:image/png;base64,{zone_b64}' style='position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: {size}px; height: {size}px; opacity: 0.75; border-radius: 50%; box-shadow: 0 0 30px cyan;'><div style='position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 10; display: flex; flex-direction: column; align-items: center; gap: 4px;'><img src='data:image/png;base64,{player_b64}' style='width: 40px; height: 40px;'><div style='width: 40px; height: 6px; background-color: rgba(0,0,0,0.7); border: 1px solid black; border-radius: 3px; overflow: hidden;'><div style='width: {player_health}%; height: 100%; background-color: {health_color}; transition: width 0.3s ease-in-out;'></div></div></div></div>"
+    html_content = (
+        f"<div class='map-frame' style='background-image:url(\"data:image/jpeg;base64,{map_b64}\"); "
+        f"background-size: cover; position:relative; overflow:hidden; border-radius:12px; "
+        f"width: 100%; height: 400px;'>"
+        f"<img src='data:image/png;base64,{zone_b64}' style='position: absolute; top: 50%; left: 50%; "
+        f"transform: translate(-50%, -50%); width: {size}px; height: {size}px; opacity: 0.75; "
+        f"border-radius: 50%; box-shadow: 0 0 30px cyan;'>"
+        f"<div style='position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); "
+        f"z-index: 10; display: flex; flex-direction: column; align-items: center; gap: 4px;'>"
+        f"<img src='data:image/png;base64,{player_b64}' style='width: 40px; height: 40px;'>"
+        f"<div style='width: 40px; height: 6px; background-color: rgba(0,0,0,0.7); border: 1px solid black; "
+        f"border-radius: 3px; overflow: hidden;'>"
+        f"<div style='width: {player_health}%; height: 100%; background-color: {health_color}; "
+        f"transition: width 0.3s ease-in-out;'></div></div></div></div>"
+    )
 
     render_html(html_content)
-    
+
+
 # ==================================================
 # ANIMATED MATCH SIMULATION
-# (step-by-step sequence instead of an instant result)
 # ==================================================
 
 def run_match_simulation():
 
     steps = [
-        ("🛩️", "Plane entering Miramar...", 0.18),
-        ("🪂", "Squad has dropped in!", 0.18),
-        ("🎒", "Looting buildings...", 0.18),
-        ("🛡️", "Zone is shrinking...", 0.18),
-        ("🔫", "Engaging enemy squads...", 0.18),
-        ("📊", "Calculating survival odds...", 0.18),
+        ("🛩️", "Plane entering Miramar...", 0.5),
+        ("🪂", "Squad has dropped in!", 0.5),
+        ("🎒", "Looting buildings...", 0.5),
+        ("🛡️", "Zone is shrinking...", 0.5),
+        ("🔫", "Engaging enemy squads...", 0.5),
+        ("📊", "Calculating survival odds...", 0.5),
     ]
 
     progress = st.progress(0)
@@ -370,10 +388,9 @@ def run_match_simulation():
 
     total = len(steps)
 
-    for i, (emoji, message, frac) in enumerate(steps):
-
+    for i, (emoji, message, delay) in enumerate(steps):
         status.markdown(f"### {emoji} {message}")
-        time.sleep(0.7)
+        time.sleep(delay)
         progress.progress(int((i + 1) / total * 100))
 
     status.empty()
@@ -385,12 +402,19 @@ def run_match_simulation():
 # ==================================================
 
 def show_rank_badge(badge, commentary):
-
-    render_html(f"""<div class='badge-reveal' style="border-color:{badge['color']};"><div class='badge-emoji'>{badge['emoji']}</div><div class='badge-title' style="color:{badge['color']};">{badge['title']}</div><div class='badge-commentary'>{commentary}</div></div>""")
+    render_html(
+        f"""
+        <div class='badge-reveal' style="border-color:{badge['color']};">
+            <div class='badge-emoji'>{badge['emoji']}</div>
+            <div class='badge-title' style="color:{badge['color']};">{badge['title']}</div>
+            <div class='badge-commentary'>{commentary}</div>
+        </div>
+        """
+    )
 
 
 # ==================================================
-# SQUAD COMPARISON
+# SQUAD COMPARISON — MVP highlight + ranked rows + chart
 # ==================================================
 
 def show_squad_comparison(squad_results):
@@ -398,14 +422,30 @@ def show_squad_comparison(squad_results):
     import pandas as pd
     import plotly.express as px
 
-    df = pd.DataFrame(squad_results)
-
+    df = pd.DataFrame(squad_results).sort_values("probability", ascending=False).reset_index(drop=True)
     best = df.iloc[0]
 
     st.success(
-        f"🏅 Best performer in squad: **{best['name']}** "
+        f"🏅 MVP of the squad: **{best['name']}** "
         f"({best['probability']}% win probability)"
     )
+
+    rows_html = "<div>"
+    for i, row in df.iterrows():
+        is_mvp = i == 0
+        mvp_tag = "<span class='squad-mvp-tag'>MVP</span>" if is_mvp else ""
+        row_class = "squad-row mvp" if is_mvp else "squad-row"
+        rows_html += (
+            f"<div class='{row_class}'>"
+            f"<div class='squad-rank'>#{i + 1}</div>"
+            f"<div class='squad-name'>{row['name']}{mvp_tag}</div>"
+            f"<div>🔫 {row['kills']} kills</div>"
+            f"<div class='squad-prob'>{row['probability']}%</div>"
+            f"</div>"
+        )
+    rows_html += "</div>"
+
+    render_html(rows_html)
 
     fig = px.bar(
         df,
@@ -418,5 +458,136 @@ def show_squad_comparison(squad_results):
     )
 
     fig.update_traces(textposition="outside")
+    fig.update_layout(
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font_color="#f4f1ea",
+        showlegend=False
+    )
 
     st.plotly_chart(fig, use_container_width=True)
+
+
+# ==================================================
+# PDF MATCH REPORT
+# ==================================================
+# Built with ReportLab only (no Plotly chart images, no
+# kaleido/Chrome dependency) so it stays cloud-safe. Covers
+# player stats, probability, mean/variance/std/z-score, badge
+# and commentary as requested.
+
+def generate_match_report_pdf(result, kills, loot, squad, zone):
+
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import cm
+    from reportlab.lib import colors
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    )
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER
+
+    buffer = io.BytesIO()
+
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        topMargin=2 * cm,
+        bottomMargin=2 * cm,
+        leftMargin=2 * cm,
+        rightMargin=2 * cm,
+    )
+
+    styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle(
+        "ReportTitle",
+        parent=styles["Title"],
+        textColor=colors.HexColor("#b8860b"),
+        fontSize=22,
+        alignment=TA_CENTER,
+    )
+
+    subtitle_style = ParagraphStyle(
+        "ReportSubtitle",
+        parent=styles["Normal"],
+        alignment=TA_CENTER,
+        textColor=colors.HexColor("#444444"),
+        spaceAfter=14,
+    )
+
+    heading_style = ParagraphStyle(
+        "SectionHeading",
+        parent=styles["Heading2"],
+        textColor=colors.HexColor("#1a1a1a"),
+        spaceBefore=14,
+        spaceAfter=8,
+    )
+
+    badge = result["badge"]
+
+    elements = []
+
+    elements.append(Paragraph("PUBG Battle Win Predictor", title_style))
+    elements.append(Paragraph("Match Report — Miramar Survival Analysis", subtitle_style))
+    elements.append(Spacer(1, 10))
+
+    elements.append(Paragraph("Match Inputs", heading_style))
+    input_table = Table(
+        [
+            ["Kills", str(kills)],
+            ["Loot Level", str(loot)],
+            ["Squad Size", str(squad)],
+            ["Zone Safety", str(zone)],
+        ],
+        colWidths=[8 * cm, 8 * cm],
+    )
+    input_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f4c542")),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+        ("FONTSIZE", (0, 0), (-1, -1), 11),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    elements.append(input_table)
+
+    elements.append(Paragraph("Prediction Results", heading_style))
+    result_table = Table(
+        [
+            ["Win Probability", f"{result['probability']}%"],
+            ["Risk Assessment", result["risk"]],
+            ["Mean Win % (dataset)", str(result["mean"])],
+            ["Variance", str(result["variance"])],
+            ["Standard Deviation", str(result["std"])],
+            ["Z-Score", str(result["z_score"])],
+        ],
+        colWidths=[8 * cm, 8 * cm],
+    )
+    result_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f4c542")),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+        ("FONTSIZE", (0, 0), (-1, -1), 11),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    elements.append(result_table)
+
+    elements.append(Paragraph("Rank & Commentary", heading_style))
+    elements.append(Paragraph(
+        f"<b>Badge:</b> {badge['emoji']} {badge['title']}", styles["Normal"]
+    ))
+    elements.append(Spacer(1, 4))
+    elements.append(Paragraph(
+        f"<b>Commentary:</b> {result['commentary']}", styles["Normal"]
+    ))
+
+    elements.append(Spacer(1, 20))
+    elements.append(Paragraph(
+        "Generated by the PUBG Battle Win Predictor — a probability & statistics project.",
+        subtitle_style
+    ))
+
+    doc.build(elements)
+
+    buffer.seek(0)
+    return buffer

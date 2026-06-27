@@ -1,216 +1,27 @@
-// =====================================================
-// PUBG BATTLE PREDICTOR
-// ANIMATION ENGINE
-// =====================================================
-
-
-// ==========================================
-// RANDOM PLAYER MOVEMENT
-// ==========================================
-
-function movePlayer() {
-
-    let player =
-    document.getElementById("player-marker");
-
-    if (!player) return;
-
-    let x =
-    Math.floor(
-        Math.random() * 400
-    );
-
-    let y =
-    Math.floor(
-        Math.random() * 250
-    );
-
-    player.style.left =
-    x + "px";
-
-    player.style.top =
-    y + "px";
-}
-
-
-// Every 2 Seconds
-
-setInterval(
-    movePlayer,
-    2000
-);
-
-
-// ==========================================
-// ZONE PULSE EFFECT
-// ==========================================
-
-function pulseZone() {
-
-    let zone =
-    document.querySelector(".zone");
-
-    if (!zone) return;
-
-    zone.style.boxShadow =
-    "0px 0px 40px cyan";
-
-    setTimeout(() => {
-
-        zone.style.boxShadow =
-        "0px 0px 10px cyan";
-
-    }, 700);
-}
-
-
-setInterval(
-    pulseZone,
-    1200
-);
-
-
-// ==========================================
-// DUST PARTICLES
-// ==========================================
-
-function createDust() {
-
-    const dust =
-    document.createElement("div");
-
-    dust.classList.add(
-        "dust-particle"
-    );
-
-    dust.style.left =
-    Math.random() * window.innerWidth +
-    "px";
-
-    dust.style.top =
-    Math.random() * window.innerHeight +
-    "px";
-
-    document.body.appendChild(
-        dust
-    );
-
-    setTimeout(() => {
-
-        dust.remove();
-
-    }, 4000);
-}
-
-
-setInterval(
-    createDust,
-    300
-);
-
-
-// ==========================================
-// BATTLE NOTIFICATION
-// ==========================================
-
-function battleAlert(message) {
-
-    const alertBox =
-    document.createElement("div");
-
-    alertBox.classList.add(
-        "battle-alert"
-    );
-
-    alertBox.innerText =
-    message;
-
-    document.body.appendChild(
-        alertBox
-    );
-
-    setTimeout(() => {
-
-        alertBox.remove();
-
-    }, 2500);
-}
-
-
-// ==========================================
-// RANDOM MATCH EVENTS
-// ==========================================
-
-const events = [
-
-    "Enemy spotted!",
-    "Airdrop landed!",
-    "Zone shrinking!",
-    "Squad revived!",
-    "Vehicle detected!",
-    "Sniper nearby!",
-    "Loot acquired!"
-];
-
-
-function randomEvent() {
-
-    let randomMessage =
-
-    events[
-        Math.floor(
-            Math.random() *
-            events.length
-        )
-    ];
-
-    battleAlert(
-        randomMessage
-    );
-}
-
-
-setInterval(
-    randomEvent,
-    8000
-);
-
-
-// ==========================================
-// PROBABILITY FLASH EFFECT
-// ==========================================
-
-function flashProbability() {
-
-    const meter =
-    document.querySelector(
-        ".prob-card"
-    );
-
-    if (!meter) return;
-
-    meter.style.transform =
-    "scale(1.03)";
-
-    setTimeout(() => {
-
-        meter.style.transform =
-        "scale(1)";
-
-    }, 300);
-}
-
-
-setInterval(
-    flashProbability,
-    2500
-);
-
-
-// ==========================================
-// LOADED
-// ==========================================
-
-console.log(
-    "PUBG Animation Engine Loaded"
-);
+// ==================================================
+// PUBG BATTLE PREDICTOR — OPTIONAL JS HOOK
+//
+// IMPORTANT: every animation that used to live here
+// (dust particles, plane flight, character drop, probability
+// flashing) has been moved to pure CSS keyframes in
+// styles.css. Pure CSS animations run the instant the markup
+// is inserted into the DOM and need no script execution at
+// all, which is what makes them reliable on Streamlit Cloud.
+//
+// This file used to rewrite every `document.` lookup to
+// `window.parent.document.` so it could reach elements living
+// on Streamlit's main page from inside this component's
+// sandboxed iframe. That cross-iframe DOM access is exactly
+// what was unreliable on Streamlit Cloud (timing, sandbox
+// permissions, and load order all differ from localhost). So
+// this script no longer touches the parent document at all —
+// it is not required for anything in the app to work.
+//
+// It's kept only as a placeholder/hook in case a future
+// same-iframe widget ever needs a small bit of JS. There is
+// currently nothing for it to do.
+// ==================================================
+
+(function () {
+    // Intentionally empty. All visual effects are CSS-driven.
+})();

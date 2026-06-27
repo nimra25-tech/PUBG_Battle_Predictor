@@ -1,19 +1,16 @@
-import streamlit as st # type: ignore
-import pandas as pd # type: ignore
-import plotly.express as px # type: ignore
+import streamlit as st  # type: ignore
+import pandas as pd  # type: ignore
+import plotly.express as px  # type: ignore
 import time
-import os
 
-from logic import predict_win, simulate_custom_squad, simulate_squad, probability_trend_by_kills
-
-os.makedirs("charts", exist_ok=True)
+from logic import predict_win, simulate_custom_squad, probability_trend_by_kills
 
 from visuals import (
     load_css,
     load_js,
     show_hero,
-    show_plane,
-    show_character_drop,
+    show_intro_sequence,
+    INTRO_DURATION_SECONDS,
     show_map_zone,
     show_probability_meter,
     show_result,
@@ -21,7 +18,8 @@ from visuals import (
     run_match_simulation,
     show_rank_badge,
     show_squad_comparison,
-    play_sound
+    play_sound,
+    generate_match_report_pdf,
 )
 
 # ==================================================
@@ -29,7 +27,7 @@ from visuals import (
 # ==================================================
 
 st.set_page_config(
-    page_title="PUBG Battle Win Predictor",   
+    page_title="PUBG Battle Win Predictor",
     page_icon="🏜️",
     layout="wide"
 )
@@ -70,9 +68,8 @@ if not st.session_state["started"]:
 
     _, center_col, _ = st.columns([1, 1, 1])
 
-
     with center_col:
-        play_sound("assets/sounds/lobby.mp3")   
+        play_sound("assets/sounds/lobby.mp3", key="lobby")
         if st.button(" Start Match", use_container_width=True):
             st.session_state["started"] = True
             st.rerun()
@@ -81,25 +78,24 @@ if not st.session_state["started"]:
 
 # ==================================================
 # INTRO ANIMATION — plays once after Start is clicked
+#
+# Rendered as a SINGLE persistent HTML block (see
+# show_intro_sequence) so the plane flight, parachute drop,
+# loading text and progress bar all run as one continuous CSS
+# sequence with nothing replacing it mid-animation. We sleep
+# once for the total duration, then move on — there is no
+# rerun in between to interrupt anything, which is what made
+# the original two-step (plane, then drop) version unreliable
+# on Streamlit Cloud.
 # ==================================================
 
 if not st.session_state["intro_played"]:
 
-    intro_slot = st.empty()
-
-    with intro_slot.container():
-        show_plane()
-
-    time.sleep(3)
-
-    with intro_slot.container():
-        show_character_drop()
-
-    time.sleep(4)
-
-    intro_slot.empty()
+    show_intro_sequence()
+    time.sleep(INTRO_DURATION_SECONDS)
 
     st.session_state["intro_played"] = True
+    st.rerun()
 
 # ==================================================
 # SETUP VIEW — sidebar, battlefield, predict button
@@ -112,13 +108,10 @@ if st.session_state["view"] == "setup":
     # Player Kills Input
     st.sidebar.subheader("🔫 Player Kills")
 
-    # You (Player)
     your_kills = st.sidebar.slider("You (Your Kills)", 0, 20, 5, key="your_kills")
 
-    # Squad Size
     squad_size = st.sidebar.selectbox("👥 Squad Size", [1, 2, 3, 4], key="squad_size")
 
-    # Teammates kills
     teammate_kills = []
     for i in range(1, squad_size):
         kills = st.sidebar.slider(f"Teammate {i} Kills", 0, 20, 5, key=f"teammate_{i}")
@@ -138,17 +131,17 @@ if st.session_state["view"] == "setup":
         run_match_simulation()
 
         result = predict_win(
-            your_kills,      # your kills
+            your_kills,
             loot,
-            squad_size,      # squad size
+            squad_size,
             zone
         )
 
         squad_results = simulate_custom_squad(
-            your_kills, 
-            teammate_kills, 
-            loot, 
-            zone, 
+            your_kills,
+            teammate_kills,
+            loot,
+            zone,
             squad_size
         )
 
@@ -162,11 +155,14 @@ if st.session_state["view"] == "setup":
         st.session_state["squad_results"] = squad_results
         st.session_state["trend_df"] = trend_df
 
-        # keep the match inputs so the result page can reuse them
         st.session_state["kills"] = your_kills
         st.session_state["loot"] = loot
         st.session_state["squad"] = squad_size
         st.session_state["zone"] = zone
+
+        # New match => previous result's "already played" sound
+        # keys should be free to play again next time.
+        st.session_state["played_sounds"] = {"intro_plane", "lobby"}
 
         st.session_state["view"] = "result"
 
@@ -201,21 +197,28 @@ loot = st.session_state["loot"]
 squad = st.session_state["squad"]
 zone = st.session_state["zone"]
 
-# ==================================================
-# RESULT
-# ==================================================
-
 if "result" in st.session_state:
 
     result = st.session_state["result"]
-
     probability = result["probability"]
 
-    if st.button("🔄 New Match"):
-        st.session_state["view"] = "setup"
-        st.rerun()
+    top_left, top_right = st.columns([1, 1])
 
-    # Load the dataset once here so every section below can reuse it
+    with top_left:
+        if st.button("🔄 New Match"):
+            st.session_state["view"] = "setup"
+            st.rerun()
+
+    with top_right:
+        pdf_buffer = generate_match_report_pdf(result, kills, loot, squad, zone)
+        st.download_button(
+            label="📄 Download Match Report",
+            data=pdf_buffer,
+            file_name="pubg_match_report.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+        )
+
     try:
         df = pd.read_csv("dummy_data.csv")
     except FileNotFoundError:
@@ -236,18 +239,9 @@ if "result" in st.session_state:
 
     with tab_result:
 
-        show_probability_meter(
-            probability
-        )
-
-        show_rank_badge(
-            result["badge"],
-            result["commentary"]
-        )
-
-        show_result(
-            result
-        )
+        show_probability_meter(probability)
+        show_rank_badge(result["badge"], result["commentary"])
+        show_result(result)
 
     # =============================================
     # TAB 2: SQUAD COMPARISON
@@ -255,21 +249,14 @@ if "result" in st.session_state:
 
     with tab_squad:
 
-        st.subheader(
-            "👥 Squad Comparison"
-        )
+        st.subheader("👥 Squad Comparison")
 
         if "squad_results" in st.session_state:
-
-            show_squad_comparison(
-                st.session_state["squad_results"]
-            )
+            show_squad_comparison(st.session_state["squad_results"])
 
         st.markdown("---")
 
-        st.subheader(
-            "📈 What If? Win Probability vs Kills"
-        )
+        st.subheader("📈 What If? Win Probability vs Kills")
 
         if "trend_df" in st.session_state:
 
@@ -291,13 +278,19 @@ if "result" in st.session_state:
                 name="Your Current Match"
             )
 
-            st.plotly_chart(
-                fig_trend,
-                use_container_width=True
+            fig_trend.update_layout(
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                font_color="#f4f1ea",
             )
+
+            st.plotly_chart(fig_trend, use_container_width=True)
 
     # =============================================
     # TAB 3: CHARTS
+    # (No write_image() calls anywhere — charts are
+    # rendered for in-app display only, never saved to
+    # PNG, so there's no Kaleido/Chrome dependency.)
     # =============================================
 
     with tab_charts:
@@ -306,177 +299,99 @@ if "result" in st.session_state:
 
         with chart_pie:
 
-            st.subheader(
-                "🥧 Factor Contribution"
-            )
+            st.subheader("🥧 Factor Contribution")
 
             pie_df = pd.DataFrame({
-
-                "Factor": [
-                    "Kills",
-                    "Loot",
-                    "Squad",
-                    "Zone"
-                ],
-
-                "Weight": [
-                    30,
-                    25,
-                    25,
-                    20
-                ]
+                "Factor": ["Kills", "Loot", "Squad", "Zone"],
+                "Weight": [30, 25, 25, 20]
             })
 
-            fig_pie = px.pie(
-                pie_df,
-                names="Factor",
-                values="Weight",
-                hole=0.4
+            fig_pie = px.pie(pie_df, names="Factor", values="Weight", hole=0.4)
+            fig_pie.update_layout(
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                font_color="#f4f1ea",
             )
 
-            st.plotly_chart(
-                fig_pie,
-                use_container_width=True
-            )
-
-            # fig_pie.write_image(
-            #     "charts/factor_contribution.png"
-            # )
+            st.plotly_chart(fig_pie, use_container_width=True)
 
         with chart_hist:
 
-            st.subheader(
-                "📉 Win Rate Distribution"
-            )
+            st.subheader("📉 Win Rate Distribution")
 
             if df is not None:
 
                 fig_hist = px.histogram(
-                    df,
-                    x="win%",
-                    nbins=10,
-                    title="Dataset Win Rate Distribution"
+                    df, x="win%", nbins=10, title="Dataset Win Rate Distribution"
+                )
+                fig_hist.update_layout(
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    font_color="#f4f1ea",
                 )
 
-                st.plotly_chart(
-                    fig_hist,
-                    use_container_width=True
-                )
-
-                # fig_hist.write_image(
-                #    "charts/win_distribution.png"
-                # )
+                st.plotly_chart(fig_hist, use_container_width=True)
 
             else:
-
-                st.warning(
-                    "dummy_data.csv not found"
-                )
+                st.warning("dummy_data.csv not found")
 
         chart_player, chart_compare = st.columns(2)
 
         with chart_player:
 
-            st.subheader(
-                "📊 Current Match Analysis"
-            )
+            st.subheader("📊 Current Match Analysis")
 
             player_df = pd.DataFrame({
-
-                "Category": [
-                    "Kills",
-                    "Loot",
-                    "Squad",
-                    "Zone"
-                ],
-
-                "Value": [
-                    kills,
-                    loot,
-                    squad,
-                    zone
-                ]
+                "Category": ["Kills", "Loot", "Squad", "Zone"],
+                "Value": [kills, loot, squad, zone]
             })
 
-            fig_bar = px.bar(
-                player_df,
-                x="Category",
-                y="Value",
-                title="Current Battle Statistics"
+            fig_bar = px.bar(player_df, x="Category", y="Value", title="Current Battle Statistics")
+            fig_bar.update_layout(
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                font_color="#f4f1ea",
             )
 
-            st.plotly_chart(
-                fig_bar,
-                use_container_width=True
-            )
-
-            # fig_bar.write_image(
-            #     "charts/player_stats.png"
-            # )
+            st.plotly_chart(fig_bar, use_container_width=True)
 
         with chart_compare:
 
-            st.subheader(
-                "📊 Player vs Average"
-            )
+            st.subheader("📊 Player vs Average")
 
             comparison_df = pd.DataFrame({
-
-                "Category": [
-                    "Dataset Mean",
-                    "Current Player"
-                ],
-
-                "Value": [
-                    result["mean"],
-                    probability
-                ]
+                "Category": ["Dataset Mean", "Current Player"],
+                "Value": [result["mean"], probability]
             })
 
             fig_compare = px.bar(
-                comparison_df,
-                x="Category",
-                y="Value",
-                title="Player vs Average Performance"
+                comparison_df, x="Category", y="Value", title="Player vs Average Performance"
+            )
+            fig_compare.update_layout(
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                font_color="#f4f1ea",
             )
 
-            st.plotly_chart(
-                fig_compare,
-                use_container_width=True
-            )
+            st.plotly_chart(fig_compare, use_container_width=True)
 
-            # fig_compare.write_image(
-            #     "charts/mean_comparison.png"
-            # )
-
-        st.subheader(
-            "🎯 Kills vs Win Probability"
-        )
+        st.subheader("🎯 Kills vs Win Probability")
 
         if df is not None:
 
             scatter_fig = px.scatter(
-                df,
-                x="kills",
-                y="win%",
-                trendline="ols",
-                title="Kills vs Win Probability"
+                df, x="kills", y="win%", trendline="ols", title="Kills vs Win Probability"
+            )
+            scatter_fig.update_layout(
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                font_color="#f4f1ea",
             )
 
-            st.plotly_chart(
-                scatter_fig,
-                use_container_width=True
-            )
-
-            # scatter_fig.write_image(
-            #     "charts/kills_vs_probability.png"
-            # )
+            st.plotly_chart(scatter_fig, use_container_width=True)
 
         else:
-
-            st.warning(
-                "dummy_data.csv not found"
-            )
+            st.warning("dummy_data.csv not found")
 
     # =============================================
     # TAB 4: STATISTICS
@@ -484,51 +399,19 @@ if "result" in st.session_state:
 
     with tab_stats:
 
-        st.subheader(
-            "📈 Statistical Analysis"
-        )
+        st.subheader("📈 Statistical Analysis")
 
-        show_stats(
-            result
-        )
+        show_stats(result)
 
         st.markdown("---")
 
-        st.subheader(
-            "🎯 Performance Interpretation"
-        )
+        st.subheader("🎯 Performance Interpretation")
 
         z = result["z_score"]
 
         if z > 1:
-
-            st.success(
-                f"""
-                Your Z-Score is {z}
-
-                You are performing ABOVE average players.
-                """
-            )
-
+            st.success(f"Your Z-Score is {z}\n\nYou are performing ABOVE average players.")
         elif z < -1:
-
-            st.error(
-                f"""
-                Your Z-Score is {z}
-
-                You are performing BELOW average players.
-                """
-            )
-
+            st.error(f"Your Z-Score is {z}\n\nYou are performing BELOW average players.")
         else:
-
-            st.info(
-                f"""
-                Your Z-Score is {z}
-
-                You are close to average player performance.
-                """
-            )
-
-
-
+            st.info(f"Your Z-Score is {z}\n\nYou are close to average player performance.")
