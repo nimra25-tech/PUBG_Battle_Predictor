@@ -95,7 +95,7 @@ if not st.session_state["intro_played"]:
     with intro_slot.container():
         show_character_drop()
 
-    time.sleep(2.2)
+    time.sleep(4)
 
     intro_slot.empty()
 
